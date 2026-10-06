@@ -401,7 +401,14 @@ function BodyPainTracker() {
               b.classDate.localeCompare(a.classDate)
             )[0].classDate;
             setExpandedGroups(new Set([mostRecentClassDate]));
+            // 讀出上次存的上課日期
+            setClassDate(mostRecentClassDate);
           }
+        }
+        // 同時讀取上次存的上課日期（以防萬一沒有記錄但有日期存檔）
+        const dateres = await storageGet("pain-drawing-lastClassDate");
+        if (dateres && dateres.value) {
+          setClassDate(dateres.value);
         }
       } catch (e) {
         // 尚無資料屬正常情況
@@ -439,6 +446,14 @@ function BodyPainTracker() {
     const next = [rec, ...records];
     setRecords(next);
     persist(next);
+    // 同時保存上次用的上課日期，以便下次重開 App 時讀取
+    (async () => {
+      try {
+        await storageSet("pain-drawing-lastClassDate", classDate);
+      } catch (e) {
+        // ignore
+      }
+    })();
     setExpandedGroups((prev) => new Set([...prev, classDate]));
     setHistory([]);
     setNote("");
