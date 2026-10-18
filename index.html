@@ -8,103 +8,315 @@
   <meta name="apple-mobile-web-app-title" content="痠痛紀錄">
   <title>痠痛紀錄</title>
   <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #faf8f6; color: #38322f; font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", sans-serif; }
-    .status { min-height: 100dvh; display: flex; justify-content: center; align-items: center; padding: 28px; }
-    .panel { width: min(100%, 440px); padding: 28px 22px; text-align: center; background: white; border-radius: 20px; box-shadow: 0 6px 40px #46382d12; }
-    .icon { font-size: 35px; }
-    h1 { font-size: 21px; margin: 14px 0 10px; }
-    p { line-height: 1.7; color: #726963; font-size: 14px; }
-    small { display: block; font-size: 12px; line-height: 1.65; color: #a09a96; overflow-wrap: anywhere; }
-    button { border: 0; border-radius: 12px; background: #6a5c55; color: white; font: inherit; font-weight: 600; padding: 12px 18px; margin: 13px 0; cursor: pointer; }
-    .spinner { width: 28px; height: 28px; margin: auto; border: 3px solid #ece7e3; border-top-color: #7c6760; border-radius: 50%; animation: spin 1s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    *{box-sizing:border-box}
+    body{margin:0;background:#faf8f6;color:#38322f;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC",sans-serif}
+    .status{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:26px}
+    .panel{width:min(100%,440px);padding:29px 24px;text-align:center;background:white;border-radius:20px;box-shadow:0 6px 40px #46382d12}
+    h1{font-size:21px;margin:12px 0 9px}
+    p{line-height:1.75;color:#726963;font-size:14px}
+    small{display:block;color:#a09a96;font-size:12px;overflow-wrap:anywhere;line-height:1.6}
+    button{background:#6a5c55;color:#fff;border:0;border-radius:12px;font:inherit;font-weight:600;padding:12px 18px;margin-top:14px}
+    .spinner{width:29px;height:29px;margin:0 auto;border:3px solid #ece7e3;border-top-color:#7c6760;border-radius:50%;animation:rotate 1s linear infinite}
+    @keyframes rotate{to{transform:rotate(360deg)}}
   </style>
 </head>
 <body>
-  <main id="status" class="status" role="status" aria-live="polite">
+  <main id="bt-status" class="status" role="status" aria-live="polite">
     <div class="panel">
-      <div class="spinner" aria-hidden="true"></div>
-      <h1>正在恢復痠痛紀錄…</h1>
-      <p>正在讀取你原本保存在 GitHub 的網頁程式，不會清除手機內的紀錄。</p>
-      <small id="detail">正在連線到 GitHub</small>
+      <div class="spinner"></div>
+      <h1>正在開啟痠痛紀錄…</h1>
+      <p>優先使用手機已保存的完整網頁程式，保留原本的紀錄和人體圖。</p>
+      <small id="bt-progress">正在讀取本機快取</small>
     </div>
   </main>
-  <script>
-    /* BODY_TRACKER_RESCUE_WRAPPER v1.0
-       This is a recovery launcher, not a copy of the complete original app.
-       It loads the previous full index.html from this repository's Git history,
-       pins the public JS dependencies and restores the HTML on the same origin.
-       localStorage is never cleared or written by this launcher.
-    */
-    (function () {
-      'use strict';
-      var OWNER = 'sweijue';
-      var REPO = 'body-tracker';
-      var BRANCH = 'main';
-      var detail = document.getElementById('detail');
-      function status(msg) { detail.textContent = msg; }
-      function fail(err) {
-        console.error('Body tracker rescue failed', err);
-        document.getElementById('status').innerHTML =
-          '<div class="panel">' +
-          '<div class="icon" aria-hidden="true">⚠️</div>' +
-          '<h1>尚未成功載入原本的痠痛紀錄</h1>' +
-          '<p>原始網頁暫時無法讀取，沒有刪除或修改手機的紀錄。請保持原本的主畫面 App，不要清除網站資料。</p>' +
-          '<button type="button" onclick="location.reload()">重新載入</button>' +
-          '<small id="error-detail"></small></div>';
-        document.getElementById('error-detail').textContent = String(err && err.message || err);
+<script>
+/* BODY_TRACKER_RESCUE_WRAPPER v2.1
+ * Caches the exact prior full application source in IndexedDB on first successful recovery.
+ * Every subsequent launch loads that cached source without checking GitHub history.
+ * No deletion or migration of pain-drawing-records occurs.
+ */
+(function(){
+  'use strict';
+  var OWNER='sweijue', REPO='body-tracker', BRANCH='main';
+  var DB_NAME='pain-drawing-app-shell-cache-v2', STORE='source', CACHE_KEY='legacy-full-source';
+  var progress=document.getElementById('bt-progress');
+  var main=document.getElementById('bt-status');
+  function status(msg){if(progress)progress.textContent=msg;}
+  function isOriginal(html){
+    return typeof html==='string' && html.length>1000 &&
+      html.indexOf('pain-drawing-records')>=0 &&
+      html.indexOf('CombinedBodyCanvas')>=0 &&
+      html.indexOf('BODY_TRACKER_RESCUE_WRAPPER')<0;
+  }
+  function openCache(){
+    return new Promise(function(resolve){
+      if(!window.indexedDB){resolve(null);return;}
+      try{
+        var req=indexedDB.open(DB_NAME,1);
+        req.onupgradeneeded=function(){
+          if(!req.result.objectStoreNames.contains(STORE))req.result.createObjectStore(STORE);
+        };
+        req.onsuccess=function(){resolve(req.result);};
+        req.onerror=function(){resolve(null);};
+        req.onblocked=function(){resolve(null);};
+      }catch(e){resolve(null);}
+    });
+  }
+  async function readCache(){
+    var db=await openCache();
+    if(!db)return null;
+    return new Promise(function(resolve){
+      try{
+        var req=db.transaction(STORE,'readonly').objectStore(STORE).get(CACHE_KEY);
+        req.onsuccess=function(){
+          var html=req.result;
+          resolve(isOriginal(html)?html:null);
+        };
+        req.onerror=function(){resolve(null);};
+      }catch(e){resolve(null);}
+      finally{setTimeout(function(){try{db.close();}catch(e){}},100);}
+    });
+  }
+  async function writeCache(html){
+    if(!isOriginal(html))return false;
+    var db=await openCache();
+    if(!db)return false;
+    return new Promise(function(resolve){
+      try{
+        var tx=db.transaction(STORE,'readwrite');
+        tx.objectStore(STORE).put(html,CACHE_KEY);
+        tx.oncomplete=function(){db.close();resolve(true);};
+        tx.onerror=tx.onabort=function(){db.close();resolve(false);};
+      }catch(e){try{db.close();}catch(x){}resolve(false);}
+    });
+  }
+  function timedFetch(url){
+    var ctl=new AbortController(), timeout=setTimeout(function(){ctl.abort();},17000);
+    return fetch(url,{cache:'no-store',signal:ctl.signal})
+      .then(function(resp){
+        if(!resp.ok)throw new Error('HTTP '+resp.status+' '+url);
+        return resp;
+      }).finally(function(){clearTimeout(timeout);});
+  }
+  async function findPreviousOriginal(){
+    for(var page=1;page<=2;page++){
+      var api='https://api.github.com/repos/'+OWNER+'/'+REPO+
+        '/commits?path=index.html&per_page=100&page='+page+'&sha='+BRANCH;
+      var commits=await timedFetch(api).then(function(r){return r.json();});
+      if(!Array.isArray(commits))throw new Error('GitHub 歷史版本格式不正確');
+      for(var i=0;i<commits.length;i++){
+        if(!commits[i]||!commits[i].sha)continue;
+        status('首次修復：搜尋原始網頁版本 '+(i+1)+' / '+commits.length);
+        try{
+          var url='https://raw.githubusercontent.com/'+OWNER+'/'+REPO+'/'+commits[i].sha+'/index.html';
+          var html=await timedFetch(url).then(function(r){return r.text();});
+          if(isOriginal(html))return html;
+        }catch(err){console.warn('Reading prior version failed:',err);}
       }
-      function timedFetch(url) {
-        var controller = new AbortController();
-        var timeout = setTimeout(function () { controller.abort(); }, 15000);
-        return fetch(url, { cache: 'no-store', signal: controller.signal })
-          .then(function (response) {
-            if (!response.ok) throw new Error('讀取失敗：HTTP ' + response.status + ' / ' + url);
-            return response;
-          }).finally(function () { clearTimeout(timeout); });
+      if(commits.length<100)break;
+    }
+    throw new Error('找不到原本完整的痠痛紀錄程式');
+  }
+
+  // Appended to the recovered full source (not to the data).
+  // This is for note visibility and last-resort brush-width persistence.
+  function enhancementRuntime(){
+    'use strict';
+    var NOTE_KEY='pain-drawing-records', BRUSH_KEY='pain-drawing-brush-size-index';
+    var notesStyle = document.createElement('style');
+    notesStyle.id='bt-enhancement-css';
+    notesStyle.textContent =
+      '.bt-saved-note{display:block!important;padding:9px 11px!important;'+
+      'margin:6px 0!important;background:#fff8e9!important;'+
+      'border:1px solid #efd9b7!important;border-radius:9px!important;'+
+      'color:#463c33!important;white-space:pre-wrap!important;'+
+      'overflow-wrap:anywhere!important;line-height:1.65!important;'+
+      'max-height:30vh;overflow-y:auto;font-size:14px!important}'+
+      '.bt-saved-note:before{content:"備註：";font-weight:700}'+
+      /* Note: SVG-level opacity is applied once to the final group, not each path. */
+      'svg:has(path[data-bt-ink="yes"]){opacity:.55!important;isolation:isolate}'+
+      'svg:has(path[data-bt-ink="yes"]) path[data-bt-ink="yes"]{'+
+      'opacity:1!important;mix-blend-mode:normal!important}'+
+      '#bt-floating-note{position:fixed;top:calc(70px + env(safe-area-inset-top));'+
+      'left:14px;right:14px;z-index:2147483646;padding:11px 13px;'+
+      'border-radius:13px;box-shadow:0 4px 20px #0002;'+
+      'background:#fff8e9;color:#40352c;border:1px solid #eddec5;'+
+      'font:14px/1.65 -apple-system,BlinkMacSystemFont,sans-serif;'+
+      'max-height:25vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;'+
+      'display:none}';
+    document.head.appendChild(notesStyle);
+    var floatNote=document.createElement('aside');
+    floatNote.id='bt-floating-note';
+    floatNote.setAttribute('aria-label','該筆紀錄備註');
+    document.body.appendChild(floatNote);
+    function allNotes(){
+      try{
+        var records=JSON.parse(localStorage.getItem(NOTE_KEY)||'[]');
+        if(!Array.isArray(records))return [];
+        return [...new Set(records.map(function(x){return x && typeof x.note==='string'?x.note.trim():'';}).filter(Boolean))];
+      }catch(e){return [];}
+    }
+    function hasViewerAncestor(el){
+      var p=el;
+      while(p && p!==document.body){
+        var attr=((p.className && typeof p.className==='string')?p.className:'')+' '+(p.id||'');
+        if(p.matches && (p.matches('[role="dialog"],dialog[open],[aria-modal="true"]')))return true;
+        if(/viewer|modal|overlay/i.test(attr)){
+          var r=p.getBoundingClientRect();
+          if(r.width>=innerWidth*.55 && r.height>=innerHeight*.4)return true;
+        }
+        var css=getComputedStyle(p),rect=p.getBoundingClientRect();
+        if(css.position==='fixed' && rect.width>=innerWidth*.65 && rect.height>=innerHeight*.55)return true;
+        p=p.parentElement;
       }
-      function patch(html) {
-        // Pin versions so a future CDN release cannot silently break the app.
-        html = html.replace(/https:\/\/(?:www\.)?unpkg\.com\/react(?:@[^/\s"']+)?\/umd\/react(?:\.production)?\.min\.js/gi,
-          'https://unpkg.com/react@18.3.1/umd/react.production.min.js');
-        html = html.replace(/https:\/\/(?:www\.)?unpkg\.com\/react-dom(?:@[^/\s"']+)?\/umd\/react-dom(?:\.production)?\.min\.js/gi,
-          'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js');
-        html = html.replace(/https:\/\/(?:www\.)?unpkg\.com\/@babel\/standalone(?:@[^/\s"']+)?\/babel\.min\.js/gi,
-          'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js');
-        // When the app is not mounted, explain the failure instead of a white page.
-        var safetyStyle = '<style id="body-tracker-safe-fallback">#root:empty:after{content:"網頁仍在載入；如果此訊息持續顯示，表示程式尚未成功啟動。";display:block;max-width:340px;margin:25vh auto;text-align:center;color:#665b55;padding:24px;line-height:1.7;font:15px -apple-system,BlinkMacSystemFont,sans-serif}</style>';
-        if (/<\/head\s*>/i.test(html)) html = html.replace(/<\/head\s*>/i, safetyStyle + '</head>');
-        return html;
+      return false;
+    }
+    var scheduled=false, applying=false;
+    function refresh(){
+      scheduled=false;
+      if(applying)return;
+      applying=true;
+      try{
+        var notes=allNotes();
+        var nodeList=document.querySelectorAll('div,p,span,section');
+        var viewerText='';
+        for(var i=0;i<nodeList.length;i++){
+          var el=nodeList[i];
+          if(el.id==='bt-floating-note'||el.closest('#bt-floating-note'))continue;
+          if(el.children.length>0 || !el.textContent)continue;
+          var txt=el.textContent.trim();
+          if(!txt||notes.indexOf(txt)<0)continue;
+          if(!el.classList.contains('bt-saved-note'))el.classList.add('bt-saved-note');
+          if(hasViewerAncestor(el))viewerText=txt;
+        }
+        if(viewerText){
+          var finalText='📝 備註\n'+viewerText;
+          if(floatNote.textContent!==finalText)floatNote.textContent=finalText;
+          if(floatNote.style.display!=='block')floatNote.style.display='block';
+        }else if(floatNote.style.display!=='none'){
+          floatNote.style.display='none';
+        }
+      }finally{applying=false;}
+    }
+    function scheduleRefresh(){
+      if(scheduled)return;
+      scheduled=true;
+      requestAnimationFrame(refresh);
+    }
+    var observer=new MutationObserver(scheduleRefresh);
+    observer.observe(document.body,{subtree:true,childList:true,characterData:true});
+    scheduleRefresh();
+    // Fallback for alternative releases where the React state variable name changed.
+    document.addEventListener('change',function(ev){
+      var el=ev.target;
+      if(!el||el.type!=='range')return;
+      var label=(el.parentElement&&el.parentElement.textContent||'').trim();
+      if(/筆畫|筆刷|粗細|線條|大小/.test(label)){
+        var v=Number(el.value);
+        if(Number.isInteger(v)&&v>=0&&v<=4){
+          try{localStorage.setItem(BRUSH_KEY,String(v));}catch(e){}
+        }
       }
-      var api = 'https://api.github.com/repos/' + OWNER + '/' + REPO + '/commits?path=index.html&per_page=25&sha=' + BRANCH;
-      status('搜尋 GitHub 上的原始版本…');
-      timedFetch(api).then(function (res) { return res.json(); })
-        .then(async function (commits) {
-          if (!Array.isArray(commits) || commits.length === 0) throw new Error('找不到 index.html 的歷史版本。');
-          for (var i = 0; i < commits.length; i++) {
-            var sha = commits[i].sha;
-            if (!sha) continue;
-            status('核對原始版本 ' + (i + 1) + ' / ' + commits.length + '…');
-            try {
-              var rawUrl = 'https://raw.githubusercontent.com/' + OWNER + '/' + REPO + '/' + sha + '/index.html';
-              var html = await timedFetch(rawUrl).then(function (r) { return r.text(); });
-              // Skip recovery wrappers and unrelated versions. Keep the original app as-is.
-              if (html.includes('BODY_TRACKER_RESCUE_WRAPPER')) continue;
-              if (!html.includes('pain-drawing-records') || !html.includes('<script')) continue;
-              status('已找到原始網頁，正在啟動…');
-              var repaired = patch(html);
-              document.open();
-              document.write(repaired);
-              document.close();
-              return;
-            } catch (error) {
-              console.warn('Could not recover commit ' + sha, error);
-            }
-          }
-          throw new Error('歷史版本中未找到原本的痠痛紀錄網頁，或 GitHub 無法讀取原始碼。');
-        }).catch(fail);
-    })();
-  </script>
+    },true);
+  }
+
+  function patchSource(source){
+    var stats={brush:false,strokes:0,notes:0,viewer:false};
+    var html=source;
+    // Pin dependencies. Restored source is still complete, including body illustrations.
+    html=html.replace(/https:\/\/(?:www\.)?unpkg\.com\/react(?:@[^/\s"']+)?\/umd\/react(?:\.production)?\.min\.js/gi,
+      'https://unpkg.com/react@18.3.1/umd/react.production.min.js');
+    html=html.replace(/https:\/\/(?:www\.)?unpkg\.com\/react-dom(?:@[^/\s"']+)?\/umd\/react-dom(?:\.production)?\.min\.js/gi,
+      'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js');
+    html=html.replace(/https:\/\/(?:www\.)?unpkg\.com\/@babel\/standalone(?:@[^/\s"']+)?\/babel\.min\.js/gi,
+      'https://unpkg.com/@babel/standalone@7.24.7/babel.min.js');
+
+    // Keep previous index and every following adjustment.
+    var brushRe=/const\s*\[\s*sizeIndex\s*,\s*setSizeIndex\s*\]\s*=\s*useState\s*\(\s*0\s*\)\s*;?/;
+    if(brushRe.test(html)){
+      html=html.replace(brushRe,
+        'const [sizeIndex,setSizeIndexState] = useState(() => {'+
+        '  try { const n=Number(localStorage.getItem("pain-drawing-brush-size-index"));'+
+        '  return Number.isInteger(n)&&n>=0&&n<BRUSH_WIDTHS.length?n:0; }'+
+        '  catch(e) { return 0; }'+
+        '});'+
+        'const setSizeIndex = (next) => setSizeIndexState((prev) => {'+
+        '  const raw=typeof next==="function"?next(prev):next;'+
+        '  const n=Number(raw);'+
+        '  const safe=Number.isInteger(n)?Math.max(0,Math.min(BRUSH_WIDTHS.length-1,n)):prev;'+
+        '  try { localStorage.setItem("pain-drawing-brush-size-index",String(safe)); } catch(e) {}'+
+        '  return safe;'+
+        '});');
+      stats.brush=true;
+    }
+
+    // Original SVG source used opacity=.55 and mixBlendMode=multiply on EACH
+    // path, so crossing paths darken. Turn them opaque and apply .55 opacity
+    // once at SVG group level via the appended stylesheet.
+    html=html.replace(/\bopacity\s*=\s*(["'])0\.55\1/g,function(){
+      stats.strokes++;return 'opacity="1" data-bt-ink="yes"';
+    });
+    html=html.replace(/\bopacity\s*=\s*\{\s*0\.55\s*\}/g,function(){
+      stats.strokes++;return 'opacity={1} data-bt-ink="yes"';
+    });
+
+    // Make note content legible in saved cards AND in ViewerModal.
+    html=html.replace(/>\s*\{(entry|r)\.note\}\s*</g,function(full,which){
+      stats.notes++;
+      return '><span className="bt-saved-note">{'+which+'.note}</span><';
+    });
+    html=html.replace(/\bheight\s*=\s*(["'])70vh\1/g,function(){
+      stats.viewer=true;return 'height="52vh"';
+    });
+    // Ensure an empty mount shows a useful loading/error clue.
+    var safetyStyle='<style id="bt-fallback-css">'+
+      '#root:empty:after{content:"程式載入中；如果持續顯示，代表載入失敗。";'+
+      'display:block;max-width:350px;margin:23vh auto;text-align:center;'+
+      'color:#70645d;padding:26px;line-height:1.6}</style>';
+    if(/<\/head\s*>/i.test(html))html=html.replace(/<\/head\s*>/i,safetyStyle+'</head>');
+    // Note runtime also guarantees visible notes when the viewer has clipped them.
+    var addScript='<script>('+enhancementRuntime.toString()+')();<'+'/script>';
+    if(/<\/body\s*>/i.test(html))html=html.replace(/<\/body\s*>/i,addScript+'</body>');
+    else html+=addScript;
+    console.info('痠痛紀錄修復 v2.1:',stats);
+    return html;
+  }
+  function boot(source){
+    if(!isOriginal(source))throw new Error('完整程式碼檢查未通過');
+    var fixed=patchSource(source);
+    document.open();
+    document.write(fixed);
+    document.close();
+  }
+  function fail(error){
+    console.error('Body tracker cache/recovery error:',error);
+    main.innerHTML='<div class="panel"><div style="font-size:34px">⚠️</div>'+
+      '<h1>痠痛紀錄目前無法開啟</h1>'+
+      '<p>未清除任何舊紀錄。請勿刪除主畫面 App 或清除網站資料。'+
+      '網路可用時可以按下重新載入。</p>'+
+      '<button onclick="location.reload()">重新載入</button>'+
+      '<small id="bt-error"></small></div>';
+    document.getElementById('bt-error').textContent=String(error&&error.message||error);
+  }
+  async function launch(){
+    try{
+      status('讀取本機完整程式…');
+      var cached=await readCache();
+      if(cached){
+        status('已找到本機完整程式，正在開啟…');
+        boot(cached);
+        return;
+      }
+      status('首次建立快取：搜尋 GitHub 中的完整舊版…');
+      var source=await findPreviousOriginal();
+      status('將完整程式存到本機，以後不必再搜尋 GitHub…');
+      await writeCache(source);
+      status('正在載入痠痛紀錄…');
+      boot(source);
+    }catch(error){fail(error);}
+  }
+  launch();
+})();
+</script>
 </body>
 </html>
