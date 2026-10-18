@@ -30,7 +30,7 @@
     </div>
   </main>
 <script>
-/* BODY_TRACKER_RESCUE_WRAPPER v2.1
+/* BODY_TRACKER_RESCUE_WRAPPER v2.2
  * Caches the exact prior full application source in IndexedDB on first successful recovery.
  * Every subsequent launch loads that cached source without checking GitHub history.
  * No deletion or migration of pain-drawing-records occurs.
@@ -122,91 +122,146 @@
   // This is for note visibility and last-resort brush-width persistence.
   function enhancementRuntime(){
     'use strict';
-    var NOTE_KEY='pain-drawing-records', BRUSH_KEY='pain-drawing-brush-size-index';
-    var notesStyle = document.createElement('style');
-    notesStyle.id='bt-enhancement-css';
-    notesStyle.textContent =
-      '.bt-saved-note{display:block!important;padding:9px 11px!important;'+
-      'margin:6px 0!important;background:#fff8e9!important;'+
-      'border:1px solid #efd9b7!important;border-radius:9px!important;'+
-      'color:#463c33!important;white-space:pre-wrap!important;'+
-      'overflow-wrap:anywhere!important;line-height:1.65!important;'+
-      'max-height:30vh;overflow-y:auto;font-size:14px!important}'+
-      '.bt-saved-note:before{content:"備註：";font-weight:700}'+
-      /* Note: SVG-level opacity is applied once to the final group, not each path. */
-      'svg:has(path[data-bt-ink="yes"]){opacity:.55!important;isolation:isolate}'+
-      'svg:has(path[data-bt-ink="yes"]) path[data-bt-ink="yes"]{'+
-      'opacity:1!important;mix-blend-mode:normal!important}'+
-      '#bt-floating-note{position:fixed;top:calc(70px + env(safe-area-inset-top));'+
-      'left:14px;right:14px;z-index:2147483646;padding:11px 13px;'+
-      'border-radius:13px;box-shadow:0 4px 20px #0002;'+
-      'background:#fff8e9;color:#40352c;border:1px solid #eddec5;'+
-      'font:14px/1.65 -apple-system,BlinkMacSystemFont,sans-serif;'+
-      'max-height:25vh;overflow-y:auto;white-space:pre-wrap;word-break:break-word;'+
-      'display:none}';
-    document.head.appendChild(notesStyle);
-    var floatNote=document.createElement('aside');
-    floatNote.id='bt-floating-note';
-    floatNote.setAttribute('aria-label','該筆紀錄備註');
-    document.body.appendChild(floatNote);
-    function allNotes(){
-      try{
-        var records=JSON.parse(localStorage.getItem(NOTE_KEY)||'[]');
-        if(!Array.isArray(records))return [];
-        return [...new Set(records.map(function(x){return x && typeof x.note==='string'?x.note.trim():'';}).filter(Boolean))];
-      }catch(e){return [];}
+    // v2.2: no floating note. The original history/viewer owns its note placement.
+    // Never alter localStorage records or rewrite saved stroke data.
+    var style=document.createElement('style');
+    style.id='bt-enhancement-css-v22';
+    style.textContent=[
+      '.bt-saved-note{display:block!important;padding:9px 11px!important;',
+      'margin:6px 0!important;background:#fff8e9!important;',
+      'border:1px solid #efd9b7!important;border-radius:9px!important;',
+      'color:#463c33!important;white-space:pre-wrap!important;',
+      'overflow-wrap:anywhere!important;line-height:1.65!important;',
+      'font-size:14px!important}',
+      '.bt-saved-note:before{content:"備註：";font-weight:700}',
+      // Crucial: remove opacity on SVG (which could dim body illustrations).
+      'svg:has(path[data-bt-ink="yes"]){opacity:1!important;isolation:auto!important}',
+      // Render original React-owned paths transparently. They remain in the DOM
+      // for React reconciliation and hit testing. Color output is composited below.
+      'svg path[data-bt-ink="yes"]{opacity:0!important}',
+      'svg [data-bt-composite="yes"]{pointer-events:none!important}',
+      'svg [data-bt-composite="yes"] *{pointer-events:none!important}'
+    ].join('');
+    document.head.appendChild(style);
+
+    var SVG_NS='http://www.w3.org/2000/svg';
+    var sequence=0;
+    var fingerprints=new WeakMap();
+    function svgEl(tag){return document.createElementNS(SVG_NS,tag);}
+    function stableColor(p){
+      // CSS color computed on original SVG source; preserve exact hue.
+      return p.getAttribute('stroke')||p.style.stroke||getComputedStyle(p).stroke||'#E5B923';
     }
-    function hasViewerAncestor(el){
-      var p=el;
-      while(p && p!==document.body){
-        var attr=((p.className && typeof p.className==='string')?p.className:'')+' '+(p.id||'');
-        if(p.matches && (p.matches('[role="dialog"],dialog[open],[aria-modal="true"]')))return true;
-        if(/viewer|modal|overlay/i.test(attr)){
-          var r=p.getBoundingClientRect();
-          if(r.width>=innerWidth*.55 && r.height>=innerHeight*.4)return true;
-        }
-        var css=getComputedStyle(p),rect=p.getBoundingClientRect();
-        if(css.position==='fixed' && rect.width>=innerWidth*.65 && rect.height>=innerHeight*.55)return true;
-        p=p.parentElement;
+    function strokeWidth(p){
+      var w=parseFloat(p.getAttribute('stroke-width')||p.style.strokeWidth||getComputedStyle(p).strokeWidth);
+      return Number.isFinite(w)&&w>0?w:4;
+    }
+    function composeOne(svg){
+      var ink=Array.from(svg.querySelectorAll('path[data-bt-ink="yes"]'));
+      if(!ink.length)return;
+      var key=ink.map(function(p){
+        return [p.getAttribute('d'),stableColor(p),strokeWidth(p),
+          p.getAttribute('transform'),p.getAttribute('stroke-linecap'),
+          p.getAttribute('stroke-linejoin')].join('|');
+      }).join('##');
+      if(fingerprints.get(svg)===key && svg.querySelector('[data-bt-composite="yes"]'))return;
+      fingerprints.set(svg,key);
+      // Safe: do not move/remove any React-created element; only our own SVG layer.
+      svg.querySelectorAll('[data-bt-composite="yes"]').forEach(function(n){n.remove();});
+      var byColor=new Map();
+      var bounds=null;
+      var maxW=4;
+      ink.forEach(function(p){
+        var color=stableColor(p);
+        if(!byColor.has(color))byColor.set(color,[]);
+        byColor.get(color).push(p);
+        maxW=Math.max(maxW,strokeWidth(p));
+        try{
+          var b=p.getBBox();
+          if(b && Number.isFinite(b.x) && Number.isFinite(b.width)){
+            var right=b.x+b.width, bottom=b.y+b.height;
+            if(!bounds) bounds={x:b.x,y:b.y,right:right,bottom:bottom};
+            else{
+              bounds.x=Math.min(bounds.x,b.x);
+              bounds.y=Math.min(bounds.y,b.y);
+              bounds.right=Math.max(bounds.right,right);
+              bounds.bottom=Math.max(bounds.bottom,bottom);
+            }
+          }
+        }catch(e){}
+      });
+      var vb=svg.viewBox&&svg.viewBox.baseVal;
+      if(!bounds || !Number.isFinite(bounds.x)){
+        bounds=vb&&vb.width>0?{x:vb.x,y:vb.y,right:vb.x+vb.width,bottom:vb.y+vb.height}:
+          {x:0,y:0,right:1000,bottom:1000};
       }
-      return false;
+      var pad=Math.max(10,maxW*2);
+      var x=bounds.x-pad, y=bounds.y-pad;
+      var w=Math.max(1,bounds.right-bounds.x+2*pad);
+      var h=Math.max(1,bounds.bottom-bounds.y+2*pad);
+      var output=svgEl('g');
+      output.setAttribute('data-bt-composite','yes');
+      output.setAttribute('pointer-events','none');
+      var defs=svgEl('defs');
+      output.appendChild(defs);
+      byColor.forEach(function(paths,color){
+        var id='bt-ink-mask-v22-'+(++sequence);
+        var mask=svgEl('mask');
+        mask.setAttribute('id',id);
+        mask.setAttribute('maskUnits','userSpaceOnUse');
+        mask.setAttribute('maskContentUnits','userSpaceOnUse');
+        mask.setAttribute('x',String(x));mask.setAttribute('y',String(y));
+        mask.setAttribute('width',String(w));mask.setAttribute('height',String(h));
+        paths.forEach(function(src){
+          var white=src.cloneNode(true);
+          white.removeAttribute('data-bt-ink');
+          white.removeAttribute('id');
+          white.setAttribute('stroke','#fff');
+          white.setAttribute('stroke-opacity','1');
+          white.setAttribute('opacity','1');
+          white.setAttribute('fill','none');
+          white.style.stroke='#fff';
+          white.style.strokeOpacity='1';
+          white.style.opacity='1';
+          white.style.fill='none';
+          white.style.mixBlendMode='normal';
+          white.style.filter='none';
+          mask.appendChild(white);
+        });
+        defs.appendChild(mask);
+        var paint=svgEl('rect');
+        paint.setAttribute('x',String(x));paint.setAttribute('y',String(y));
+        paint.setAttribute('width',String(w));paint.setAttribute('height',String(h));
+        paint.setAttribute('fill',color);
+        paint.setAttribute('opacity','0.55');
+        paint.setAttribute('mask','url(#'+id+')');
+        output.appendChild(paint);
+      });
+      svg.appendChild(output);
     }
-    var scheduled=false, applying=false;
+    var pending=false;
     function refresh(){
-      scheduled=false;
-      if(applying)return;
-      applying=true;
+      pending=false;
       try{
-        var notes=allNotes();
-        var nodeList=document.querySelectorAll('div,p,span,section');
-        var viewerText='';
-        for(var i=0;i<nodeList.length;i++){
-          var el=nodeList[i];
-          if(el.id==='bt-floating-note'||el.closest('#bt-floating-note'))continue;
-          if(el.children.length>0 || !el.textContent)continue;
-          var txt=el.textContent.trim();
-          if(!txt||notes.indexOf(txt)<0)continue;
-          if(!el.classList.contains('bt-saved-note'))el.classList.add('bt-saved-note');
-          if(hasViewerAncestor(el))viewerText=txt;
-        }
-        if(viewerText){
-          var finalText='📝 備註\n'+viewerText;
-          if(floatNote.textContent!==finalText)floatNote.textContent=finalText;
-          if(floatNote.style.display!=='block')floatNote.style.display='block';
-        }else if(floatNote.style.display!=='none'){
-          floatNote.style.display='none';
-        }
-      }finally{applying=false;}
+        document.querySelectorAll('svg:has(path[data-bt-ink="yes"])').forEach(composeOne);
+      }catch(e){console.warn('Ink compositor:',e);}
     }
     function scheduleRefresh(){
-      if(scheduled)return;
-      scheduled=true;
-      requestAnimationFrame(refresh);
+      if(!pending){pending=true;requestAnimationFrame(refresh);}
     }
-    var observer=new MutationObserver(scheduleRefresh);
-    observer.observe(document.body,{subtree:true,childList:true,characterData:true});
-    scheduleRefresh();
-    // Fallback for alternative releases where the React state variable name changed.
+    var observer=new MutationObserver(function(records){
+      // Ignore changes to our own overlay to prevent mutation loops.
+      if(records.some(function(r){
+        if(r.target && r.target.closest && r.target.closest('[data-bt-composite="yes"]'))return false;
+        var nodes=Array.from(r.addedNodes).concat(Array.from(r.removedNodes));
+        if(nodes.length && nodes.every(function(n){return n.nodeType===1 && n.getAttribute('data-bt-composite')==='yes';}))return false;
+        return true;
+      }))scheduleRefresh();
+    });
+    observer.observe(document.body,{subtree:true,childList:true,attributes:true,
+      attributeFilter:['d','stroke','stroke-width','style','opacity','transform']});
+    // Keep the last selected brush size compatible with the original five positions.
+    var BRUSH_KEY='pain-drawing-brush-size-index';
     document.addEventListener('change',function(ev){
       var el=ev.target;
       if(!el||el.type!=='range')return;
@@ -218,6 +273,7 @@
         }
       }
     },true);
+    scheduleRefresh();
   }
 
   function patchSource(source){
@@ -250,9 +306,8 @@
       stats.brush=true;
     }
 
-    // Original SVG source used opacity=.55 and mixBlendMode=multiply on EACH
-    // path, so crossing paths darken. Turn them opaque and apply .55 opacity
-    // once at SVG group level via the appended stylesheet.
+    // SVG original paths become opaque but are rendered by a color-wise union
+    // compositor (mask per color, .55 opacity applied once) after React mounts.
     html=html.replace(/\bopacity\s*=\s*(["'])0\.55\1/g,function(){
       stats.strokes++;return 'opacity="1" data-bt-ink="yes"';
     });
@@ -274,11 +329,11 @@
       'display:block;max-width:350px;margin:23vh auto;text-align:center;'+
       'color:#70645d;padding:26px;line-height:1.6}</style>';
     if(/<\/head\s*>/i.test(html))html=html.replace(/<\/head\s*>/i,safetyStyle+'</head>');
-    // Note runtime also guarantees visible notes when the viewer has clipped them.
+    // No floating note: original record viewer displays the note only once.
     var addScript='<script>('+enhancementRuntime.toString()+')();<'+'/script>';
     if(/<\/body\s*>/i.test(html))html=html.replace(/<\/body\s*>/i,addScript+'</body>');
     else html+=addScript;
-    console.info('痠痛紀錄修復 v2.1:',stats);
+    console.info('痠痛紀錄修復 v2.2:',stats);
     return html;
   }
   function boot(source){
